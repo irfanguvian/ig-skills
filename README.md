@@ -1,4 +1,4 @@
-# irfan-skills
+# ig-skills
 
 Skills and small tools I use every day with [Claude Code](https://docs.claude.com/en/docs/claude-code).
 Each one fixes a real problem I hit while letting an AI agent work on a big codebase:
@@ -38,9 +38,9 @@ flowchart LR
 There is no install script on purpose: each README lists the exact steps,
 so you can see what goes where. The usual shape:
 
-1. Clone this repo, for example to `~/code/irfan-skills`.
+1. Clone this repo, for example to `~/code/ig-skills`.
 2. Symlink a skill folder into Claude Code's skills folder:
-   `ln -s ~/code/irfan-skills/skills/<name> ~/.claude/skills/<name>`
+   `ln -s ~/code/ig-skills/skills/<name> ~/.claude/skills/<name>`
 3. If the item has a CLI or hook, follow that README to put it on your `PATH`
    or register the hook in `~/.claude/settings.json`.
 

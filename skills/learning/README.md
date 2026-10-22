@@ -87,17 +87,17 @@ Manual steps. There is no install script.
 
 1. Clone the repo:
    ```sh
-   git clone <this repo url> ~/code/irfan-skills
+   git clone <this repo url> ~/code/ig-skills
    ```
 2. Link the skill folder. The path must be exactly `~/.claude/skills/learning`, because the hooks call `learn.sh` there:
    ```sh
-   ln -s ~/code/irfan-skills/skills/learning ~/.claude/skills/learning
+   ln -s ~/code/ig-skills/skills/learning ~/.claude/skills/learning
    ```
 3. Put the four Claude Code hook scripts where the settings point:
    ```sh
    mkdir -p ~/.claude/hooks
    for h in session-start pre-search post-edit stop; do
-     ln -s ~/code/irfan-skills/skills/learning/hooks/learning-$h.sh ~/.claude/hooks/learning-$h.sh
+     ln -s ~/code/ig-skills/skills/learning/hooks/learning-$h.sh ~/.claude/hooks/learning-$h.sh
    done
    ```
    `learn.sh doctor` checks these match the copies in the skill folder. `learn.sh fix` copies them back if they go missing or stale.
@@ -129,7 +129,7 @@ Manual steps. There is no install script.
    ```
    By hand, also copy the worktree hook (skip this if the repo already has a `post-checkout` hook; merge it by hand then):
    ```sh
-   cp ~/code/irfan-skills/skills/learning/hooks/learning-git-post-checkout.sh <repo>/.git/hooks/post-checkout
+   cp ~/code/ig-skills/skills/learning/hooks/learning-git-post-checkout.sh <repo>/.git/hooks/post-checkout
    chmod +x <repo>/.git/hooks/post-checkout
    ```
 5. Restart Claude Code so it loads the hooks.
@@ -181,7 +181,7 @@ bash ~/.claude/skills/learning/bin/learn.sh status                  # note count
 ## Tests
 
 ```sh
-python3 -m unittest discover -s ~/code/irfan-skills/skills/learning/tests
+python3 -m unittest discover -s ~/code/ig-skills/skills/learning/tests
 # Ran 56 tests ... OK
 ```
 

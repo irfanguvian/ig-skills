@@ -61,13 +61,13 @@ Manual steps. There is no install script.
 
 1. Clone the repo:
    ```sh
-   git clone <this repo url> ~/code/irfan-skills
+   git clone <this repo url> ~/code/ig-skills
    ```
 2. Link the script to where the hook will call it:
    ```sh
    mkdir -p ~/.claude/hooks
-   ln -s ~/code/irfan-skills/tools/test-lock/test-lock.sh ~/.claude/hooks/test-lock.sh
-   chmod +x ~/code/irfan-skills/tools/test-lock/test-lock.sh
+   ln -s ~/code/ig-skills/tools/test-lock/test-lock.sh ~/.claude/hooks/test-lock.sh
+   chmod +x ~/code/ig-skills/tools/test-lock/test-lock.sh
    ```
 3. Register the guard in a Claude Code settings file (`~/.claude/settings.json` for all projects). Use the full path to your home folder in place of `<home>`:
    ```json
@@ -138,8 +138,8 @@ Exit codes:
 The test lives in the test-engineer-irfan skill folder. It builds a throwaway git repo in a temp folder and sets `HOME` to that folder, so it never touches a real lock.
 
 ```sh
-TL=~/code/irfan-skills/tools/test-lock/test-lock.sh \
-  PATH=/bin:/usr/bin:/opt/homebrew/bin bash ~/code/irfan-skills/skills/test-engineer-irfan/tests/test-lock-check.sh
+TL=~/code/ig-skills/tools/test-lock/test-lock.sh \
+  PATH=/bin:/usr/bin:/opt/homebrew/bin bash ~/code/ig-skills/skills/test-engineer-irfan/tests/test-lock-check.sh
 # PASS: 16 cases (a, b, b2, c, d, e, f, g, h, i, j, k, l, l2, m, n)
 ```
 

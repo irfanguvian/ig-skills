@@ -43,18 +43,18 @@ Manual steps. There is no install script.
 
 1. Clone the repo:
    ```sh
-   git clone <this repo url> ~/code/irfan-skills
+   git clone <this repo url> ~/code/ig-skills
    ```
 2. Put the CLI on your PATH with a symlink:
    ```sh
    mkdir -p ~/.local/bin
-   ln -s ~/code/irfan-skills/skills/figma-axi/bin/cli.mjs ~/.local/bin/figma-axi
-   chmod +x ~/code/irfan-skills/skills/figma-axi/bin/cli.mjs
+   ln -s ~/code/ig-skills/skills/figma-axi/bin/cli.mjs ~/.local/bin/figma-axi
+   chmod +x ~/code/ig-skills/skills/figma-axi/bin/cli.mjs
    ```
    Make sure `~/.local/bin` is on your `PATH`.
 3. Give Claude Code the skill by linking the skill folder:
    ```sh
-   ln -s ~/code/irfan-skills/skills/figma-axi ~/.claude/skills/figma-axi
+   ln -s ~/code/ig-skills/skills/figma-axi ~/.claude/skills/figma-axi
    ```
 4. Export the token in your shell profile (for example `~/.zshenv`):
    ```sh

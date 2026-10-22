@@ -75,13 +75,13 @@ Manual steps. There is no install script.
 
 1. Clone the repo:
    ```sh
-   git clone <this repo url> ~/code/irfan-skills
+   git clone <this repo url> ~/code/ig-skills
    ```
 2. Install test-lock and register its hook. Follow [tools/test-lock/README.md](../../tools/test-lock/README.md).
 3. Install the learning skill. Follow [skills/learning/README.md](../learning/README.md).
 4. Give Claude Code this skill by linking the skill folder:
    ```sh
-   ln -s ~/code/irfan-skills/skills/test-engineer-irfan ~/.claude/skills/test-engineer-irfan
+   ln -s ~/code/ig-skills/skills/test-engineer-irfan ~/.claude/skills/test-engineer-irfan
    ```
 5. Restart Claude Code.
 
@@ -113,7 +113,7 @@ On a remote or staging target it only reads data. It never targets production.
 ## Tests
 
 ```sh
-PATH=/bin:/usr/bin:/opt/homebrew/bin bash ~/code/irfan-skills/skills/test-engineer-irfan/tests/test-lock-check.sh
+PATH=/bin:/usr/bin:/opt/homebrew/bin bash ~/code/ig-skills/skills/test-engineer-irfan/tests/test-lock-check.sh
 # PASS: 6 cases (a, b, b2, c, d, e)
 ```
 

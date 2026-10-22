@@ -56,18 +56,18 @@ Manual steps. There is no install script.
 
 1. Clone the repo:
    ```sh
-   git clone <this repo url> ~/code/irfan-skills
+   git clone <this repo url> ~/code/ig-skills
    ```
 2. Put the CLI on your PATH with a symlink. The self-test expects it at `~/bin/postgres-irfan-axi`:
    ```sh
    mkdir -p ~/bin
-   ln -s ~/code/irfan-skills/skills/postgres-irfan-axi/bin/postgres-irfan-axi ~/bin/postgres-irfan-axi
-   chmod +x ~/code/irfan-skills/skills/postgres-irfan-axi/bin/postgres-irfan-axi
+   ln -s ~/code/ig-skills/skills/postgres-irfan-axi/bin/postgres-irfan-axi ~/bin/postgres-irfan-axi
+   chmod +x ~/code/ig-skills/skills/postgres-irfan-axi/bin/postgres-irfan-axi
    ```
    Make sure `~/bin` is on your `PATH`.
 3. Give Claude Code the skill by linking the skill folder:
    ```sh
-   ln -s ~/code/irfan-skills/skills/postgres-irfan-axi ~/.claude/skills/postgres-irfan-axi
+   ln -s ~/code/ig-skills/skills/postgres-irfan-axi ~/.claude/skills/postgres-irfan-axi
    ```
 4. Optional environment variables (standard libpq names):
    ```sh
@@ -124,7 +124,7 @@ Exit codes: `0` ok, `1` SQL or connection error, `2` needs user approval (`--yes
 It creates its own throwaway database `pgx_check_<pid>`, runs 63 checks, and drops only that database at the end (also when a check fails).
 
 ```sh
-bash ~/code/irfan-skills/skills/postgres-irfan-axi/check.sh   # prints "PASS: all checks" or "FAIL: <check>"
+bash ~/code/ig-skills/skills/postgres-irfan-axi/check.sh   # prints "PASS: all checks" or "FAIL: <check>"
 ```
 
 It calls the CLI at `~/bin/postgres-irfan-axi` and runs its own setup with `PGX_PSQL` or `/opt/homebrew/opt/libpq/bin/psql` over the `/tmp` socket.

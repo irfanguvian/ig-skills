@@ -49,14 +49,14 @@ Manual steps. There is no install script.
 
 1. Clone the repo:
    ```sh
-   git clone <this repo url> ~/code/irfan-skills
+   git clone <this repo url> ~/code/ig-skills
    ```
 2. Link the folder to where Claude Code tools live, and put `jobq` on your PATH:
    ```sh
    mkdir -p ~/.claude/tools ~/.local/bin
-   ln -s ~/code/irfan-skills/tools/jobq ~/.claude/tools/jobq
+   ln -s ~/code/ig-skills/tools/jobq ~/.claude/tools/jobq
    ln -s ~/.claude/tools/jobq/jobq ~/.local/bin/jobq
-   chmod +x ~/code/irfan-skills/tools/jobq/jobq ~/code/irfan-skills/tools/jobq/jobq-guard.sh
+   chmod +x ~/code/ig-skills/tools/jobq/jobq ~/code/ig-skills/tools/jobq/jobq-guard.sh
    ```
    Make sure `~/.local/bin` is on your `PATH`. The scripts find their own folder, so they work through symlinks.
 3. Register the hook in a Claude Code settings file (`~/.claude/settings.json` for all projects, or `.claude/settings.local.json` in one project). Use the full path to your home folder in place of `<home>`:
