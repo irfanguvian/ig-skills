@@ -1,0 +1,343 @@
+#!/usr/bin/env bash
+# postgres-irfan-axi — agent-ergonomic bridge to LOCAL postgres.
+# One psql process per call, exits when done: connection always closed, RAM stays slim.
+# TOON output. Never drops a database, never runs psql backslash commands. DROP TABLE/SCHEMA, TRUNCATE need --yes.
+set -uo pipefail
+
+VERSION="1.0.0"
+PSQL_BIN="${PGX_PSQL:-}"
+if [[ -z "$PSQL_BIN" ]]; then
+  for p in /opt/homebrew/opt/libpq/bin/psql /opt/homebrew/bin/psql /usr/local/bin/psql psql; do
+    command -v "$p" >/dev/null 2>&1 && PSQL_BIN="$p" && break
+  done
+fi
+[[ -z "$PSQL_BIN" ]] && { echo "error{code:no_psql,msg:psql not found — brew install libpq}"; exit 1; }
+
+SEP=$'\x1f'
+DB="" LIMIT=20 FULL=0 YES=0 NOTX=0 ENVF="" REMOTE=0
+CMD="${1:-}"; [[ $# -gt 0 ]] && shift
+ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -d|--db)      DB="${2:?-d needs a value}"; shift 2 ;;
+    --env)        ENVF="${2:?--env needs a .env file}"; shift 2 ;;
+    --limit)      LIMIT="${2:?--limit needs a value}"; shift 2 ;;
+    --full)       FULL=1; shift ;;
+    --yes)        YES=1; shift ;;
+    --no-tx)      NOTX=1; shift ;;
+    -*)           echo "error{code:unknown_flag,msg:unknown flag $1 — see: postgres-irfan-axi help}"; exit 4 ;;
+    *)            ARGS+=("$1"); shift ;;
+  esac
+done
+
+# --env <file>: connect with the repo's DB URL (DATABASE_URL, else the first postgres URL).
+# Local host → socket first, then TCP with the URL's password (scram; sandboxed agents cannot reach
+# the socket). Remote (staging) → that host as given; writes there need --yes. Password goes to
+# PGPASSWORD env, never argv.
+if [[ -n "$ENVF" ]]; then
+  [[ -f "$ENVF" ]] || { echo "error{code:no_file,msg:$ENVF not found}"; exit 4; }
+  conn=$(/usr/bin/python3 -I - "$ENVF" <<'PY'
+import re, sys
+from urllib.parse import urlsplit, unquote, parse_qs
+url = None
+for line in open(sys.argv[1], encoding='utf-8', errors='replace'):
+    m = re.match(r'\s*(?:export\s+)?([A-Za-z_]\w*)\s*=\s*(.*?)\s*$', line)
+    if not m: continue
+    k, v = m.group(1), m.group(2).strip('"\'')
+    if not re.match(r'postgres(ql)?://', v): continue
+    if k == 'DATABASE_URL': url = v; break
+    url = url or v
+if not url: sys.exit(2)
+u = urlsplit(url)
+host = u.hostname or 'localhost'
+local = host in ('localhost', '127.0.0.1', '::1')
+out = ['local' if local else 'remote', '/tmp,127.0.0.1' if local else host, str(u.port or 5432),
+       unquote(u.username or ''), unquote(u.password or ''), unquote(u.path.lstrip('/')),
+       (parse_qs(u.query).get('sslmode') or [''])[0]]
+if any('\n' in x or '\x1f' in x for x in out): sys.exit(3)
+print('\x1f'.join(out))
+PY
+) || { echo "error{code:no_url,msg:no usable postgres URL in $ENVF}"; exit 4; }
+  IFS="$SEP" read -r kind h p u pw d ssl <<<"$conn"
+  export PGHOST="$h" PGPORT="$p"
+  [[ -n "$u" ]] && export PGUSER="$u"
+  [[ -n "$pw" ]] && export PGPASSWORD="$pw"
+  [[ -n "$ssl" ]] && export PGSSLMODE="$ssl"
+  [[ -z "$DB" ]] && DB="$d"
+  [[ "$kind" == remote ]] && REMOTE=1
+fi
+
+# psql -d also takes a URI or conninfo (any host), which would skip the remote --yes gate: plain names only
+[[ -z "$DB" || "$DB" =~ ^[A-Za-z_][A-Za-z0-9_\$-]*$ ]] || { echo "error{code:usage,msg:bad -d — plain database name only (letters digits _ \$ -), no URI or conninfo}"; exit 4; }
+
+# local postgres fallback (socket first: trust; TCP loopback needs a password); PG* env overrides
+export PGHOST="${PGHOST:-/tmp,localhost}"
+export PGPORT="${PGPORT:-5432}"
+export PGUSER="${PGUSER:-postgres}"
+export PGCONNECT_TIMEOUT="${PGCONNECT_TIMEOUT:-5}"
+
+need_db() { [[ -n "$DB" ]] || { echo "error{code:no_db,msg:-d <dbname> required. list with: postgres-irfan-axi dbs}"; exit 4; }; }
+# writes to a remote (staging) DB from --env need --yes, like other destructive acts
+remote_write() { [[ "$REMOTE" -eq 1 && "$YES" -ne 1 ]] && { echo "error{code:needs_approval,msg:write to remote DB $PGHOST. Hand off to the user for approval, then re-run with --yes}"; exit 2; }; return 0; }
+
+PG_ERR='^(psql:.*: )?(ERROR|FATAL):|^psql: error'
+TAG_RE='^[A-Z]+( [A-Z]+)*( [0-9]+)*$' # psql command tag; aligned data rows start with a space
+# pg <psql args...> — every psql call goes here. One process, closes on exit. Prints output;
+# fails when psql exit code != 0 OR an ERROR/FATAL line was printed (never trust output alone)
+pg() {
+  local out rc
+  out=$("$PSQL_BIN" -X -v ON_ERROR_STOP=1 "$@" 2>&1); rc=$?
+  printf '%s' "$out"
+  [[ $rc -eq 0 ]] && grep -qE "$PG_ERR" <<<"$out" && rc=1
+  return "$rc"
+}
+
+run_sql() { pg -q -A -t -F "$SEP" -d "$1" -c "$2"; } # $1=db $2=sql
+
+# toon <key> <fields> [limit] — stdin: SEP-separated rows -> TOON
+toon() {
+  awk -v key="$1" -v fields="$2" -v lim="${3:-0}" -v full="$FULL" -F "$SEP" '
+    /^$/ { next }
+    { rows[++n]=$0 }
+    END {
+      if (n==0) { print key "[0]: none"; exit }
+      print key "[" n "]{" fields "}:"
+      show = (lim>0 && n>lim && !full) ? lim : n
+      for (i=1;i<=show;i++) {
+        nf=split(rows[i],c,FS); line="  "
+        for (j=1;j<=nf;j++) {
+          v=c[j]
+          if (!full && length(v)>120) v=substr(v,1,100) "…+" (length(c[j])-100) "ch"
+          gsub(/\n/,"\\n",v)
+          if (v ~ /[,:"]/) { gsub(/"/,"\\\"",v); v="\"" v "\"" }
+          line = line (j>1?",":"") v
+        }
+        print line
+      }
+      if (show<n) print "  # +" (n-show) " more rows — raise --limit N or use --full"
+    }'
+}
+
+# guard <sql-or-file-content> — exit 3 forbidden, exit 2 needs --yes, exit 4 cannot parse (fail closed).
+# Sets UP: the SQL upper-cased, comments as one space, one statement per line. The scanner skips
+# strings, "names" and $tag$ bodies, so a comment cannot split a keyword and '--' in a string hides nothing.
+guard() {
+  local rc
+  UP=$(printf '%s' "$1" | perl -0777 -ne '
+    my $o = ""; exit 6 if /\0/;   # \0 marks statement ends below, so newlines inside strings can become spaces
+    while (!/\G\z/gc) {
+      if (/\G\\/gc) { exit 5 }
+      elsif (/\G--[^\r\n]*/gc) { exit 5 if $& =~ /\\/; $o .= " " }
+      elsif (/\G\/\*/gc) { my $d = 1; while ($d) { if (/\G\/\*/gc) { $d++ } elsif (/\G\*\//gc) { $d-- }
+        elsif (/\G[^\/*\\]+/gc || /\G[\/*]/gc) {} else { exit(/\G\\/gc ? 5 : 6) } } $o .= " " }
+      elsif (/\G[Ee](?=\x27)/gc) { /\G\x27(?:[^\x27\\]++|\\.|\x27\x27)*+\x27/gcs or exit 6; $o .= "E$&" }
+      elsif (/\G\$?\d\w*/gc) { $o .= $&; exit 6 if /\G(?=\x27)/gc }   # 1E\x27..\x27: psql versions lex it differently
+      elsif (/\G\x27/gc) { /\G(?:[^\x27]++|\x27\x27)*+\x27/gc or exit 6; $o .= "\x27$&" }   # opener first: no forward scan per token
+      elsif (/\G"/gc) { /\G(?:[^"]++|"")*+"/gc or exit 6; $o .= "\"$&" }
+      elsif (/\G[A-Za-z_\x80-\xff][\w\$\x80-\xff]*/gc) { $o .= $& }
+      elsif (/\G\$((?:[A-Za-z_\x80-\xff][\w\x80-\xff]*)?)/gc) { my $t = "\$$1\$";
+        if (/\G\$/gc) { /\G.*?\Q$t\E/gcs or exit 6; $o .= $t . $& } else { $o .= "\$$1" } }
+      elsif (/\G;/gc) { $o .= "\0" }
+      elsif (/\G\s+/gc) { $o .= " " }
+      else { /\G./gcs; $o .= $& }
+    }
+    $o =~ tr/\r\n\0/  \n/; $o =~ tr/ //s; print uc $o')
+  rc=$?
+  if [[ $rc -eq 5 ]]; then # psql runs these itself: \! is a shell, \o \w \copy write files, \i \gexec run unchecked SQL
+    echo "error{code:forbidden,msg:psql backslash commands (\\! \\o \\copy \\i \\gexec ...) are never allowed. Plain SQL only}"
+    exit 3
+  fi
+  [[ $rc -ne 0 ]] && { echo "error{code:usage,msg:cannot parse SQL (unterminated quote or comment). Refused}"; exit 4; }
+  if grep -qE 'DROP[[:space:]]+DATABASE' <<<"$UP"; then
+    echo "error{code:forbidden,msg:DROP DATABASE is never allowed by this tool}"
+    exit 3
+  fi
+  # COPY allowlist: TO STDOUT only; any other TO (a 'file', E'', U&'', $$..$$) or PROGRAM writes on the server
+  local cp # no grep -q at a pipe end: with pipefail its early exit can SIGPIPE sed and flip the result
+  cp=$(grep -E "(^|[^A-Z0-9_\$])COPY([^A-Z0-9_\$]|\$)" <<<"$UP" | sed -E "s/(^|[^A-Z0-9_\$])TO STDOUT([^A-Z0-9_\$]|\$)/\1\2/g")
+  if grep -qE "(^|[^A-Z0-9_\$])(PROGRAM|TO)([^A-Z0-9_\$]|\$)" <<<"$cp"; then
+    echo "error{code:forbidden,msg:server-side COPY to a file or PROGRAM is never allowed. Use COPY ... TO STDOUT}"
+    exit 3
+  fi
+  if grep -qE 'DROP[[:space:]]+(TABLE|SCHEMA)|TRUNCATE' <<<"$UP" && [[ "$YES" -ne 1 ]]; then
+    echo "error{code:needs_approval,msg:destructive statement (DROP TABLE/SCHEMA or TRUNCATE). Hand off to the user for approval, then re-run with --yes}"
+    exit 2
+  fi
+}
+
+sql_fail() { # $1=psql output [$2=extra fields] -> structured error + exit 1. Call after pg failed
+  local m; m=$(grep -m1 -E "$PG_ERR" <<<"$1") || m=$(head -1 <<<"$1")
+  [[ -n "$m" ]] || m="psql failed with no output"
+  local x; for x in DETAIL HINT; do
+    x=$(grep -m1 -E "^$x:" <<<"$1" | cut -c1-200) && m="$m | $x"
+  done
+  echo "error{code:sql,${2:+$2,}msg:\"${m//\"/\\\"}\"}"
+  exit 1
+}
+
+cmd_dbs() {
+  local out
+  out=$(run_sql postgres "SELECT d.datname, pg_size_pretty(pg_database_size(d.datname)), s.numbackends
+        FROM pg_database d JOIN pg_stat_database s ON s.datname=d.datname
+        WHERE NOT d.datistemplate ORDER BY d.datname") || sql_fail "$out"
+  printf '%s\n' "$out" | toon dbs "name,size,conns"
+  echo "next: postgres-irfan-axi tables -d <name>"
+}
+
+cmd_tables() {
+  need_db
+  local out
+  out=$(run_sql "$DB" "SELECT n.nspname||'.'||c.relname, c.reltuples::bigint,
+        pg_size_pretty(pg_total_relation_size(c.oid)),
+        (SELECT count(*) FROM pg_index i WHERE i.indrelid=c.oid)
+        FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE c.relkind IN ('r','p') AND n.nspname NOT IN ('pg_catalog','information_schema')
+        ORDER BY pg_total_relation_size(c.oid) DESC") || sql_fail "$out"
+  printf '%s\n' "$out" | toon tables "name,rows_est,size,indexes"
+  echo "next: postgres-irfan-axi desc <table> -d $DB"
+}
+
+cmd_desc() {
+  need_db
+  local t="${ARGS[0]:-}"; [[ -n "$t" ]] || { echo "error{code:usage,msg:desc <table> -d <db>}"; exit 4; }
+  # names go into SQL text below: allow plain identifiers only (blocks injection)
+  [[ "$t" =~ ^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$ ]] || { echo "error{code:usage,msg:bad table name — [schema.]table with letters digits _ only}"; exit 4; }
+  local cols idx fks tn="${t##*.}" sc="" rel="\"${t##*.}\""
+  [[ "$t" == *.* ]] && sc="${t%%.*}" && rel="\"$sc\".\"$tn\""
+  cols=$(run_sql "$DB" "SELECT column_name, data_type, is_nullable, coalesce(column_default,'')
+         FROM information_schema.columns WHERE table_name='$tn' ${sc:+AND table_schema='$sc'} ORDER BY ordinal_position") || sql_fail "$cols"
+  [[ -z "$cols" ]] && { echo "error{code:not_found,msg:table $t not found in $DB}"; exit 1; }
+  printf '%s\n' "$cols" | toon "columns" "name,type,nullable,default"
+  idx=$(run_sql "$DB" "SELECT indexname, indexdef FROM pg_indexes WHERE tablename='$tn' ${sc:+AND schemaname='$sc'}") || sql_fail "$idx"
+  printf '%s\n' "$idx" | toon indexes "name,def"
+  fks=$(run_sql "$DB" "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint
+        WHERE conrelid='$rel'::regclass AND contype='f'") || sql_fail "$fks"
+  printf '%s\n' "$fks" | toon fkeys "name,def"
+}
+
+cmd_query() {
+  need_db
+  local sql="${ARGS[0]:-}"; [[ -n "$sql" ]] || { echo "error{code:usage,msg:query \"<sql>\" -d <db>}"; exit 4; }
+  guard "$sql"
+  # one statement: a 2nd could switch read-only off first (SET, BEGIN READ WRITE); DO/CALL can COMMIT inside
+  if [[ $(grep -c '[^ ]' <<<"$UP") -ne 1 ]] || grep -qE '^ ?(DO|CALL)([^A-Z0-9_$]|$)' <<<"$UP"; then
+    echo "error{code:usage,msg:query runs one read-only statement (no DO/CALL). Use exec for writes and scripts}"
+    exit 4
+  fi
+  local hdr out
+  hdr=$(PGOPTIONS="${PGOPTIONS:+$PGOPTIONS }-c default_transaction_read_only=on" pg -q -A -F "$SEP" -d "$DB" -c "$sql") || {
+    [[ "$hdr" == *"read-only transaction"* ]] && sql_fail "$hdr" "hint:query is read-only - use exec for writes"
+    sql_fail "$hdr"; }
+  local fields; fields=$(head -1 <<<"$hdr" | tr "$SEP" ',')
+  out=$(sed '1d;$d' <<<"$hdr")   # strip header + "(N rows)" footer
+  printf '%s\n' "$out" | sed '/^$/d' | toon rows "$fields" "$LIMIT"
+}
+
+cmd_exec() {
+  need_db
+  local sql="${ARGS[0]:-}"; [[ -n "$sql" ]] || { echo "error{code:usage,msg:exec \"<sql>\" -d <db>}"; exit 4; }
+  guard "$sql"; remote_write
+  local out
+  out=$(run_sql "$DB" "$sql") || sql_fail "$out"
+  echo "ok{cmd:exec,db:$DB}"
+  [[ -n "$out" ]] && printf '%s\n' "$out" | toon result "out"
+  echo "next: postgres-irfan-axi tables -d $DB"
+}
+
+cmd_run() {
+  need_db
+  [[ ${#ARGS[@]} -gt 0 ]] || { echo "error{code:usage,msg:run <file.sql...> -d <db>}"; exit 4; }
+  remote_write
+  local f out tags rc txflag="-1"; [[ "$NOTX" -eq 1 ]] && txflag=""
+  for f in "${ARGS[@]}"; do
+    [[ -f "$f" ]] || { echo "error{code:no_file,msg:$f not found}"; exit 4; }
+    # $(cat) below drops NUL bytes, but psql cuts the line at one: the guard would read other SQL than psql runs
+    perl -0777 -ne 'exit(/\0/ ? 1 : 0)' "$f" || { echo "error{code:usage,msg:NUL byte in $f. Refused}"; exit 4; }
+    guard "$(cat "$f")"
+  done
+  for f in "${ARGS[@]}"; do
+    # no -q: keep command tags (INSERT 0 3) as row-count proof
+    # shellcheck disable=SC2086
+    out=$(pg $txflag -d "$DB" -f "$f"); rc=$?
+    tags=$(grep -E "$TAG_RE" <<<"$out" | tail -20 | paste -sd';' -)
+    if [[ $rc -ne 0 ]]; then # single tx rolled back; autocommit kept every statement before the error
+      [[ -n "$txflag" ]] && sql_fail "$out" "file:$f"
+      sql_fail "$out" "file:$f,committed:\"$tags\""
+    fi
+    echo "ok{cmd:run,file:$f,db:$DB,tx:$([[ -n "$txflag" ]] && echo single || echo auto),tags:\"$tags\"}"
+    # other output (RETURNING / SELECT rows, NOTICE), bounded
+    awk -v re="$TAG_RE" '$0 !~ re && NF { if (++n<=20) print "  " $0 } END { if (n>20) print "  # +" (n-20) " more output lines" }' <<<"$out"
+  done
+}
+
+cmd_createdb() {
+  local name="${ARGS[0]:-}"; [[ -n "$name" ]] || { echo "error{code:usage,msg:createdb <name>}"; exit 4; }
+  [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] || { echo "error{code:usage,msg:bad db name — letters digits _ - only}"; exit 4; }
+  remote_write
+  local exists
+  exists=$(run_sql postgres "SELECT 1 FROM pg_database WHERE datname='$name'") || sql_fail "$exists"
+  if [[ "$exists" == "1" ]]; then
+    echo "ok{cmd:createdb,db:$name,note:already exists — noop}"
+    exit 0
+  fi
+  local out; out=$(run_sql postgres "CREATE DATABASE \"$name\"") || sql_fail "$out"
+  echo "ok{cmd:createdb,db:$name}"
+  echo "next: postgres-irfan-axi run schema.sql -d $name"
+}
+
+cmd_dashboard() {
+  local up
+  if ! up=$(run_sql postgres "SELECT current_setting('server_version')"); then
+    echo "server{host:$PGHOST,port:$PGPORT,status:DOWN}"
+    echo "error{code:no_server,msg:\"$(head -1 <<<"$up" | tr '"' "'")\"}"
+    exit 1
+  fi
+  echo "server{host:$PGHOST,port:$PGPORT,user:$PGUSER,version:$up,status:up}"
+  cmd_dbs
+}
+
+cmd_help() {
+  local topic="${ARGS[0]:-}"
+  case "$topic" in
+    query) echo 'query "<sql>" -d <db> [--limit N] [--full] — one read-only statement (server rejects writes), TOON rows, default 20 rows shown' ;;
+    exec)  echo 'exec "<sql>" -d <db> [--yes] — DDL/DML. DROP TABLE/SCHEMA/TRUNCATE need --yes (user-approved). DROP DATABASE always refused' ;;
+    run)   echo 'run <f1.sql> [f2.sql...] -d <db> [--yes] [--no-tx] — run script files in order, each in single transaction (--no-tx for autocommit)' ;;
+    desc)  echo 'desc <table> -d <db> — columns, indexes, foreign keys' ;;
+    *) cat <<'EOF'
+postgres-irfan-axi — local postgres bridge for agents. One process per call, no lingering connections.
+
+  (no args)              server status + database list
+  dbs                    databases: name,size,conns
+  tables -d <db>         tables: name,rows_est,size,indexes
+  desc <table> -d <db>   columns + indexes + fkeys
+  query "<sql>" -d <db>  one read-only statement [--limit N] [--full]
+  exec "<sql>" -d <db>   write/DDL [--yes for destructive]
+  run <files...> -d <db> run sql scripts [--no-tx] [--yes]
+  createdb <name>        create db (noop if exists)
+  help [cmd]             this / per-command help
+  --env <repo>/.env      any cmd: connect with the repo's DATABASE_URL (local → socket then TCP+password;
+                         remote/staging → as given, writes need --yes). -d defaults to the URL's db
+
+Rules: DROP DATABASE, psql \\ commands, COPY to file/PROGRAM never. DROP TABLE/SCHEMA/TRUNCATE need --yes after user approval.
+-d takes a plain database name only (no URI, no conninfo).
+Env overrides: PGHOST PGPORT PGUSER PGPASSWORD PGX_PSQL. Default host: /tmp socket, then localhost.
+EOF
+    ;;
+  esac
+}
+
+case "$CMD" in
+  "")        cmd_dashboard ;;
+  dbs)       cmd_dbs ;;
+  tables)    cmd_tables ;;
+  desc)      cmd_desc ;;
+  query)     cmd_query ;;
+  exec)      cmd_exec ;;
+  run)       cmd_run ;;
+  createdb)  cmd_createdb ;;
+  dropdb)    echo "error{code:forbidden,msg:this tool never drops databases. Do it yourself in psql if you truly must}"; exit 3 ;;
+  version)   echo "postgres-irfan-axi $VERSION" ;;
+  help|-h|--help) cmd_help ;;
+  *)         echo "error{code:unknown_cmd,msg:unknown command $CMD — see: postgres-irfan-axi help}"; exit 4 ;;
+esac

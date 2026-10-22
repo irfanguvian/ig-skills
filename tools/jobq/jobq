@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# jobq: machine-wide one-at-a-time queue for heavy jobs (low-RAM laptop). Kernel drops the lock when the job exits or dies.
+dir="${JOBQ_DIR:-/tmp/jobq-$(id -u)}"
+lock="$dir/lock" holder="$dir/holder"
+mkdir -p "$dir" 2>/dev/null
+[ -O "$dir" ] && [ ! -L "$dir" ] || { echo "jobq: $dir is not a directory you own, refusing" >&2; exit 70; }
+chmod 700 "$dir" # also tightens a dir an older jobq left at 755
+
+if [ -n "${JOBQ_HELD:-}" ] && [ "$1" != status ]; then # nested: skip the queue only while that outer jobq still holds the lock
+  { read -r h < "$holder"; } 2>/dev/null
+  case $h in *" pid=$JOBQ_HELD "*) ps -p "$JOBQ_HELD" -o command= | grep -q jobq && exec "$@" ;; esac # alive and still jobq, not a reused pid
+fi
+
+if [ "$1" = __held ]; then # re-invoked by lockf: the lock is ours
+  (umask 077 # holder line carries full argv; the job itself keeps the caller umask
+   : > "$dir/ran.$2"
+   printf '%s pid=%s sid=%s cwd=%s cmd=%s\n' "$(date +%H:%M:%S)" "$2" "${CLAUDE_CODE_SESSION_ID:0:8}" "$PWD" "${*:3}" > "$holder")
+  export JOBQ_HELD=$2
+  shift 2
+  trap ': > "$holder"' EXIT
+  "$@"
+  exit
+fi
+
+if [ "$1" = status ]; then
+  lockf -ks -t 0 "$lock" true && echo idle || cat "$holder" 2>/dev/null
+  exit 0
+fi
+[ $# -gt 0 ] || { echo 'usage: jobq <cmd...> | jobq status' >&2; exit 64; }
+
+ran="$dir/ran.$$"; rm -f "$ran"
+lockf -ks -t 0 "$lock" "$0" __held $$ "$@"; rc=$?
+if [ $rc = 75 ] && [ ! -e "$ran" ]; then # 75 without the marker = lock busy, not the command's own exit code
+  for _ in 1 2 3 4 5; do h=$(cat "$holder" 2>/dev/null); [ -n "$h" ] && break; sleep 0.2; done # holder may still be writing its line
+  echo "jobq: queued behind ${h:-unknown} (run jobq with run_in_background: the Bash tool timeout kills a foreground wait)" >&2
+  lockf -ks -t "${JOBQ_WAIT:-3600}" "$lock" "$0" __held $$ "$@"; rc=$?
+  [ $rc = 75 ] && [ ! -e "$ran" ] && echo "jobq: gave up after ${JOBQ_WAIT:-3600}s, lock held by $(cat "$holder" 2>/dev/null)" >&2
+fi
+rm -f "$ran"
+exit $rc
