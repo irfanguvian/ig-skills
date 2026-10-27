@@ -82,6 +82,14 @@ class FindAndPreSearch(unittest.TestCase):
         self.assertTrue(graph)
         self.assertTrue(all("cursor" in l.lower() for l in graph), graph)
 
+    def test_on_demand_find_prints_node_lines_but_no_edge_lines(self):
+        if not (SKILL / "bin" / ".python").exists():
+            self.skipTest("no python with graphify")
+        # graphify answers "cursor" with NODE and EDGE lines that both name D-0001
+        out = self.learn("find", "cursor").splitlines()
+        self.assertIn("NODE D-0001", "\n".join(out))
+        self.assertEqual([], [l for l in out if l.startswith("EDGE")])
+
     def test_decision_and_session_lines_for_a_decision_term(self):
         out = self.learn("find", "idempotency")
         self.assertIn("DEC - D-0002 2026-01-02 [[billing]] refunds idempotent", out)
@@ -118,8 +126,9 @@ class FindAndPreSearch(unittest.TestCase):
         self.assertEqual(["stripe"] * 3, [m["terms"] for m in self.metrics()])
 
     def test_spaced_flag_value_is_not_the_pattern(self):
-        for cmd in ("grep -rn -A 3 stripe src", "rg -t ts webhook apps", "grep -rn -C2 checkout src"):
-            self.assertIn("additionalContext", self.hook(cmd), cmd)
+        # own session per call: the fixture's one billing note would repeat lines already sent
+        for i, cmd in enumerate(("grep -rn -A 3 stripe src", "rg -t ts webhook apps", "grep -rn -C2 checkout src")):
+            self.assertIn("additionalContext", self.hook(cmd, session_id=f"spaced0{i}"), cmd)
         self.assertEqual(["stripe", "webhook", "checkout"], [m["terms"] for m in self.metrics()])
 
     def test_search_without_a_command_line_pattern_is_skipped(self):
@@ -177,8 +186,8 @@ class FindAndPreSearch(unittest.TestCase):
         self.assertEqual(["stripe"], [m["terms"] for m in self.metrics()])
 
     def test_path_prefixed_tool_is_a_lookup(self):
-        for cmd in ("/usr/bin/grep -rn stripe src", "/opt/homebrew/bin/rg -t ts webhook apps"):
-            self.assertIn("additionalContext", self.hook(cmd), cmd)
+        for i, cmd in enumerate(("/usr/bin/grep -rn stripe src", "/opt/homebrew/bin/rg -t ts webhook apps")):
+            self.assertIn("additionalContext", self.hook(cmd, session_id=f"prefix0{i}"), cmd)
         self.assertEqual(["stripe", "webhook"], [m["terms"] for m in self.metrics()])
 
     def test_grep_for_learn_sh_find_text_is_a_lookup_not_a_find_call(self):
@@ -214,6 +223,103 @@ class FindAndPreSearch(unittest.TestCase):
         out = self.learn("stats", "30", "--here")
         self.assertIn("auto-inject: 2 lookups", out)
         self.assertIn("1 real hits of 1 rated (100%)", out)
+
+
+LONG = "z" * 70  # long folder name: DOC lines near 105 chars, so 3 INDEX + 3 DOC pass the 900-char inject cap
+
+
+class WholeWordAndBrief(unittest.TestCase):
+    """Whole-word term matching, term dedupe, find --brief and the pre-search inject built on it."""
+    setUp, learn, hook, metrics = FindAndPreSearch.setUp, FindAndPreSearch.learn, FindAndPreSearch.hook, FindAndPreSearch.metrics
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp()).resolve()
+        cls.repo = cls.tmp / "repo"
+        cls.L = cls.repo / ".learning"
+        notes = {
+            "modules/auth.md": ("auth", "account locked after five failed tries, retry later", "def keyword helper"),
+            "modules/timing.md": ("timing", "clock skew tolerance, retry window, default policy", "policy"),
+            "modules/plans.md": ("plans", "subscriptions renew monthly, retry failed charge", "charge flow"),
+            "modules/queue.md": ("queue", "retry queue drains nightly", "worker"),
+            "modules/billing.md": ("billing", "reads subscriptionStatus from the profile", "status gate"),
+            f"specs/{LONG}/zebra-one.md": ("zebra-one", "zebra " + "a" * 250, "zebra body"),
+            f"specs/{LONG}/zebra-two.md": ("zebra-two", "zebra " + "b" * 250, "zebra body"),
+            f"specs/{LONG}/zebra-three.md": ("zebra-three", "zebra " + "c" * 250, "zebra body"),
+        }
+        for rel, (nid, summary, body) in notes.items():
+            (cls.L / rel).parent.mkdir(parents=True, exist_ok=True)
+            (cls.L / rel).write_text(NOTE.format(id=nid, title=nid, tags="x", summary=summary, body=body))
+        (cls.L / "DECISIONS.md").write_text(REF.format(id="decisions", title="Decisions", body="- D-0001 2026-01-01 [[auth]] retry with backoff\n"))
+        (cls.L / "SESSIONS.md").write_text(REF.format(id="sessions", title="Sessions", body="## S-0001 2026-01-01 onboard sid:bbbb\nwork: retry [[auth]]\n"))
+        subprocess.run(["bash", str(LEARN), "build", str(cls.L)], capture_output=True, text=True, check=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def ids(self, out):
+        return [l.split(" | ")[1] for l in out.splitlines() if l.startswith("INDEX ")]
+
+    def docs(self, out):
+        return [l for l in out.splitlines() if l.startswith("DOC ")]
+
+    def ctx(self, out):
+        return json.loads(out)["hookSpecificOutput"]["additionalContext"]
+
+    def test_def_is_a_word_not_a_prefix(self):
+        out = self.learn("find", "def")
+        self.assertEqual(([], ["DOC modules/auth.md (1 hits)"]), (self.ids(out), self.docs(out)), "timing says 'default', not 'def'")
+
+    def test_short_term_takes_endings_but_a_longer_word_does_not(self):
+        out = self.learn("find", "lock")
+        self.assertEqual((["auth"], ["DOC modules/auth.md (1 hits)"]), (self.ids(out), self.docs(out)), "'locked' hits, 'clock' does not")
+
+    def test_term_of_five_chars_hits_as_word_prefix_only(self):
+        self.assertEqual(["billing", "plans"], self.ids(self.learn("find", "subscription")), "subscriptionStatus + subscriptions")
+        self.assertEqual("", self.learn("find", "scription"), "no hit inside a word")
+
+    def test_repeated_term_counts_once(self):
+        self.assertEqual(["DOC modules/auth.md (1 hits)"], self.docs(self.learn("find", "lock", "LOCK")))
+        self.learn("find", "lock LOCK skew retry Skew clock tolerance monthly")
+        self.assertEqual(["lock", "lock skew retry clock tolerance"], [m["terms"] for m in self.metrics()])
+
+    def test_brief_keeps_three_index_three_doc_and_nothing_else(self):
+        full = self.learn("find", "retry")
+        self.assertEqual((4, 4), (len(self.ids(full)), len(self.docs(full))))
+        self.assertTrue(any(l.startswith(("DEC ", "SES ")) for l in full.splitlines()))
+        brief = self.learn("find", "--brief", "retry").splitlines()
+        self.assertEqual(["INDEX"] * 3 + ["DOC"] * 3, [l.split(" ")[0] for l in brief])
+        self.assertEqual(["auth", "plans", "queue"], self.ids("\n".join(brief)), "best first, INDEX order on a tie")
+        self.assertEqual(len("INDEX ") + 200, len(self.learn("find", "--brief", "zebra").splitlines()[0]), "row cut to 200")
+
+    def test_brief_doc_lines_need_only_one_of_two_terms(self):
+        out = self.learn("find", "--brief", "retry", "zzqx")
+        self.assertEqual((["auth", "plans", "queue"], 3), (self.ids(out), len(self.docs(out))))
+        self.assertEqual("", self.learn("find", "--brief", "zzqx"))
+
+    def test_hook_inject_is_whole_lines_under_900_chars(self):
+        brief = self.learn("find", "--brief", "zebra").splitlines()
+        self.assertEqual(6, len(brief))
+        ctx = self.ctx(self.hook("grep -rn zebra src"))
+        self.assertEqual(["learning hits [zebra] (open only if relevant):"] + brief[:5], ctx.splitlines(), "6th line would pass 900")
+        self.assertLessEqual(len(ctx), 900)
+
+    def test_hook_keeps_code_words_as_terms(self):
+        self.assertEqual("", self.hook('grep -rnE "Get|Post|Patch|Put" src'), "no note names them")
+        self.assertEqual([("pre-search", "Get Post Patch Put")], [(m["ev"], m["terms"]) for m in self.metrics()])
+
+    def test_hook_never_resends_a_line_to_the_same_agent(self):
+        first = self.ctx(self.hook("grep -rn lock src")).splitlines()
+        self.assertEqual(["INDEX", "DOC"], [l.split(" ")[0] for l in first[1:]])
+        second = self.ctx(self.hook('grep -rnE "lock|skew" src')).splitlines()
+        self.assertEqual(["learning hits [lock skew] (open only if relevant):", "INDEX", "DOC modules/timing.md (1 hits)"],
+                         [second[0], second[1].split(" ")[0], second[2]])
+        self.assertEqual((3, ["timing"]), (len(second), self.ids("\n".join(second))))
+        self.assertEqual("", self.hook('grep -rnE "lock|tolerance" src'), "every line already sent")
+        self.assertEqual([(1, 0)], [(m["dup"], m["hits"]) for m in self.metrics() if m.get("dup")])
+        sub = self.ctx(self.hook('grep -rnE "lock|skew" src', agent_id="aexplore-0123456789abcdef", agent_type="Explore"))
+        self.assertEqual(["auth", "timing"], self.ids(sub), "a subagent has not seen the parent's lines")
 
 
 if __name__ == "__main__":

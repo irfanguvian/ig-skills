@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# SessionStart: if project has .learning/, inject INDEX (small) + last session + search rules.
-# stdout of SessionStart hook = context for Claude. Keep tiny. Never dump docs.
+# SessionStart: if project has .learning/, inject search rules + module ids + last session header and its next: line.
+# stdout of SessionStart hook = context for Claude. Keep under 2 KB: Claude Code shows the model only a 2 KB preview of bigger output.
 set -uo pipefail
 INPUT=$(cat 2>/dev/null)
 CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null); CWD="${CWD:-$PWD}"
@@ -19,10 +19,13 @@ if [ ! -f "$L/INDEX.md" ]; then
   exit 0
 fi
 OUT="learning: .learning/ DB present. RULES: before reading code or grepping repo, search DB first: \`$FIND <terms>\` (grep INDEX+docs+graph). Read only matched docs. $SAVE Never cat whole .learning/.
---- INDEX (head) ---
-$(sed -n '5,45p' "$L/INDEX.md")
---- last session ---
-$(awk '/^## S-/{c++} c==1{print} c==2{exit}' "$L/SESSIONS.md" 2>/dev/null | head -8)"
+$(awk -F'|' '/^\| / { id = $2; t = $3; gsub(/ /, "", id); gsub(/ /, "", t); if (id == "id") next; if (t == "concept" || t == "guide") m = m " " id; else n++ }
+  END { if (m != "" || n) print "modules:" m (n ? " +" n " more (learn.sh find)" : "") }' "$L/INDEX.md")
+$(awk '/^## S-/ { if (h != "") exit; h = substr($0, 4)
+    # cut the slug, never the sid: token (the save step matches it)
+    if (length(h) > 140) { if (match(h, / sid:[^ ]+/) && RSTART + RLENGTH > 141) h = substr(h, 1, 140 - RLENGTH) substr(h, RSTART, RLENGTH); else h = substr(h, 1, 140) }
+    print "last: " h; next }
+  h != "" && /^next:/ { print; exit }' "$L/SESSIONS.md" 2>/dev/null | cut -c1-200)"
 printf '%s\n' "$OUT"
 # metrics: bytes injected at session start
 SID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)

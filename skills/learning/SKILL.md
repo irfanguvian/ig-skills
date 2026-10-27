@@ -204,20 +204,21 @@ Loop protection is a per-session block counter at `$TMPDIR/learning-stop-<sid8>`
 
 ## query — steps
 
-1. `bash ~/.claude/skills/learning/bin/learn.sh find <terms>` — <= 18 lines, best first, query matching nothing prints nothing. Cheap. Terms: alnum words > 2 chars, max 5, English stopwords dropped (`not the and for with from this that …`, same list in the pre-search hook).
+1. `bash ~/.claude/skills/learning/bin/learn.sh find <terms>` — <= 16 lines, best first, query matching nothing prints nothing. Cheap. Terms: alnum words > 2 chars, max 5 distinct (case ignored), English stopwords dropped (`not the and for with from this that …`, same list in the pre-search hook). A term under 5 chars hits only as a whole word, optional ending `s|es|d|ed|ing`: `lock` hits `locked`, not `clock`; `def` never hits `default`. A term of 5+ chars hits as a word prefix: `subscription` hits `subscriptionStatus`, never `scription` inside a word.
    - `INDEX <row>` (<=5) INDEX rows ranked by distinct terms hit.
    - `DOC <path> (n hits)` (<=4) notes, n = terms matched. Never SESSIONS/DECISIONS/INDEX/graphify-out/vault.
    - `DEC <line>` (<=3) DECISIONS lines matching most terms, newest on tie, cut 200 chars.
    - `SES <header>` (<=2) `## S-` headers whose block matches most terms, newest on tie.
-   - `NODE`/`EDGE` (<=2 each) graphify lines that name a term. graphify puts hub nodes first for any seeded query — unfiltered they read as hits.
+   - `NODE` (<=2) graphify lines that name a term. graphify puts hub nodes first for any seeded query — unfiltered they read as hits. No EDGE lines.
+   - `find --brief <terms>` (what the pre-search hook runs): <=3 INDEX rows cut 200 chars + <=3 DOC lines (1 term is enough). No DEC/SES/NODE.
 2. Open only docs it names. Follow `[[id]]` links one hop if needed. Stop.
-3. Need relation between two concepts: `learn.sh find A B` then follow EDGE lines; or open `.learning/graphify-out/graph.html` in browser.
+3. Need relation between two concepts: `/graphify path "A" "B"`, or open `.learning/graphify-out/graph.html` in browser.
 4. Never `cat .learning/*`. Never read more than 3 docs before touching code.
 
 ## Rules
 
 - Search DB before repo. Hook does it for Grep/Glob/grep (once installed); you do it on first prompt: `learn.sh find <keywords from user ask>`.
-- Tests for the tooling: `python3 -m unittest discover -s ~/.claude/skills/learning/tests` (stdlib; vault fixture: forward ref + orphan + 2-cycle, idempotency, no-relation note, migrate; `test_find.py`: find output, pre-search filter/dedupe/find-call, stats --here — HOME/TMPDIR/LEARNING_DIR in tmp, real metrics never written).
+- Tests for the tooling: `python3 -m unittest discover -s ~/.claude/skills/learning/tests` (stdlib; vault fixture: forward ref + orphan + 2-cycle, idempotency, no-relation note, migrate; `test_find.py`: find output, whole-word + prefix match, `--brief`, pre-search filter/dedupe/line repeat/900-char cap/find-call, stats --here; `test_session_start.py`: pointer lines, board text, no-DB nudge — HOME/TMPDIR/LEARNING_DIR in tmp, real metrics never written).
 - `learn.sh build|migrate` hold `/usr/bin/lockf -k -t 25 .learning/.build.lock` (under post-edit hook timeout 30) — main checkout + worktree post-edit builds never write INDEX/graph at once. No lockf = unlocked. Lock file covered by `.learning/.gitignore` `*`.
 - DB is local only. Never `git add .learning`. Never reference it in commits.
 - Update, do not append forever: module docs are rewritten in place, capped. SESSIONS/DECISIONS are the only append logs.

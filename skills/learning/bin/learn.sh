@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # learn.sh — tiny CLI over a project's .learning/ database.
-#   learn.sh find <terms...>   INDEX rows, DOC notes, DEC/SES lines, graph lines naming a term. <= 18 lines.
+#   learn.sh find [--brief] <terms...>   word hits: INDEX rows, DOC notes, DEC/SES lines, NODE lines. <= 16 lines; --brief (pre-search hook) <= 3 INDEX + 3 DOC.
 #   learn.sh build [dir]       rebuild INDEX.md + graph.json (contract) + graphify-out/graph.json (native)
 #   learn.sh migrate [dir]     build + backfill frontmatter contract on existing notes
 #   learn.sh vault export [--out DIR] [--graph PATH]   Obsidian vault from graph.json (default .learning/vault)
@@ -215,34 +215,40 @@ PYEOF
     exit $?
     ;;
   find)
+    BRIEF=""; [ "${1:-}" = --brief ] && { BRIEF=1; shift; }
     [ -d "$L" ] || { echo "no $L"; exit 0; }
-    [ $# -gt 0 ] || { echo "usage: learn.sh find <terms...>"; exit 1; }
-    # terms: alnum words >2 chars, no English stopword (same list as the pre-search hook), max 5
-    TERMS=$(printf '%s ' "$@" | tr -c '[:alnum:]_\n' ' ' | tr ' ' '\n' | awk 'length>2 && tolower($0) !~ /^(not|the|and|for|with|from|this|that|are|was|were|has|have|into|onto|than|then|them|they|what|when|where|which|while|will|would|should|could|only|also|just|like|very|more|most|some|such|each|other|over|under|same|both)$/' | head -5 | tr '\n' ' ')
+    [ $# -gt 0 ] || { echo "usage: learn.sh find [--brief] <terms...>"; exit 1; }
+    # terms: alnum words >2 chars, no English stopword (same list as the pre-search hook), distinct (any case), max 5
+    TERMS=$(printf '%s ' "$@" | tr -c '[:alnum:]_\n' ' ' | tr ' ' '\n' | awk 'length>2 && tolower($0) !~ /^(not|the|and|for|with|from|this|that|are|was|were|has|have|into|onto|than|then|them|they|what|when|where|which|while|will|would|should|could|only|also|just|like|very|more|most|some|such|each|other|over|under|same|both)$/ && !s[tolower($0)]++' | head -5 | tr '\n' ' ')
     [ -n "$TERMS" ] || exit 0
+    # term < 5 chars: whole word + common endings ("lock" hits "locked", not "clock"); 5+ chars: word prefix
+    # ("subscription" hits "subscriptionStatus"). Terms are [[:alnum:]_] only, so no regex escaping
+    WB='[^[:alnum:]_]'; END='(s|es|d|ed|ing)?'
     # stdin lines (or '## S-' blocks with arg "block") -> "score<TAB>line<TAB>text", score = distinct terms hit
-    rank() { awk -v terms="$TERMS" -v block="${1:-}" '
-      BEGIN { n = split(tolower(terms), T, " ") }
+    rank() { awk -v terms="$TERMS" -v block="${1:-}" -v wb="$WB" -v end="$END" '
+      BEGIN { n = split(tolower(terms), T, " "); for (i = 1; i <= n; i++) R[i] = "(^|" wb ")" T[i] (length(T[i]) >= 5 ? "" : end "(" wb "|$)") }
       function flush(  s, k) { s = 0; for (k in hit) s++; if (s && h != "") print s "\t" hn "\t" h; split("", hit) }
       block && /^## S-/ { flush(); h = $0; hn = NR }
       !block { h = $0; hn = NR }
-      { l = tolower($0); for (i = 1; i <= n; i++) if (index(l, T[i])) hit[i] = 1 }
+      { l = tolower($0); for (i = 1; i <= n; i++) if (l ~ R[i]) hit[i] = 1 }
       !block { flush() }
       END { flush() }'; }
+    # --brief: 3 INDEX rows cut 200, 3 DOC lines (min 1 term); DEC/SES/graph never computed
+    NI=5; ND=4; IC=""
+    [ -z "$BRIEF" ] || { NI=3; ND=3; IC=200; }
     OUT=$(
-      grep '^| ' "$L/INDEX.md" 2>/dev/null | grep -vE '^\| id \||\| doc \|' | rank | sort -k1,1nr -k2,2n | head -5 | cut -f3- | sed 's/^/INDEX /'
+      grep '^| ' "$L/INDEX.md" 2>/dev/null | grep -vE '^\| id \||\| doc \|' | rank | sort -k1,1nr -k2,2n | head -$NI | cut -f3- | cut -c1-$IC | sed 's/^/INDEX /'
       # options before the path: BSD grep stops option parsing at the first operand
       for t in $TERMS; do
-        grep -ril --include='*.md' --exclude-dir=vault --exclude-dir=graphify-out -- "$t" "$L" 2>/dev/null
-      done | grep -vE '/(INDEX|SESSIONS|DECISIONS)\.md$' | sort | uniq -c | sort -rn | head -4 | awk -v L="$L/" '{sub(L,"",$2); print "DOC " $2 " (" $1 " hits)"}'
+        grep -rilE --include='*.md' --exclude-dir=vault --exclude-dir=graphify-out -- "(^|$WB)$t$([ ${#t} -ge 5 ] || printf %s "$END($WB|\$)")" "$L" 2>/dev/null
+      done | grep -vE '/(INDEX|SESSIONS|DECISIONS)\.md$' | sort | uniq -c | sort -rn | head -$ND | awk -v L="$L/" '{sub(L,"",$2); print "DOC " $2 " (" $1 " hits)"}'
+      [ -n "$BRIEF" ] && exit 0
       # SESSIONS/DECISIONS match nearly any term: name the best lines, not the file
       grep '^- D-' "$L/DECISIONS.md" 2>/dev/null | rank | sort -k1,1nr -k2,2nr | head -3 | cut -f3- | cut -c1-200 | sed 's/^/DEC /'
       cat "$L/SESSIONS.md" 2>/dev/null | rank block | sort -k1,1nr -k2,2n | head -2 | cut -f3- | sed 's/^## /SES /'
       if [ -f "$L/graphify-out/graph.json" ]; then
-        # graphify returns the same top nodes for any query: keep only lines naming a term
-        G=$("$PY" -I -m graphify query "$TERMS" --graph "$L/graphify-out/graph.json" --budget "${LEARN_BUDGET:-3000}" 2>/dev/null | grep -iE "$(printf '%s' "${TERMS% }" | tr ' ' '|')")
-        printf '%s\n' "$G" | grep -E '^NODE' | head -2
-        printf '%s\n' "$G" | grep -E '^EDGE' | head -2
+        # graphify returns the same top nodes for any query: keep only NODE lines naming a term (EDGE lines: bytes, rarely followed)
+        "$PY" -I -m graphify query "$TERMS" --graph "$L/graphify-out/graph.json" --budget "${LEARN_BUDGET:-3000}" 2>/dev/null | grep -iE "(^|$WB)($(printf '%s' "${TERMS% }" | tr ' ' '|'))$END($WB|\$)" | grep -E '^NODE' | head -2
       fi
     )
     [ -z "$OUT" ] || printf '%s\n' "$OUT"

@@ -92,13 +92,21 @@ SEEN="${TD:+$TD/learning-seen-${SID:0:8}}"; SEEN="${SEEN:-/dev/null}"
 KEY="${SID:-nosid} ${AGID:-main} $(printf '%s\n' $TERMS | sort -u | tr '\n' ' ')"
 PREV=$(awk -F'\t' -v k="$KEY" '$1 == k { print $2; exit }' "$SEEN" 2>/dev/null)
 [ -z "$PREV" ] || { lm pre-search "{\"hits\":0,\"bytes\":0,\"dup\":true,\"saved\":$PREV}"; exit 0; }
-HITS=$(LEARNING_CALLER=hook LEARNING_DIR="$L" bash "$HOME/.claude/skills/learning/bin/learn.sh" find $TERMS 2>/dev/null | head -18)
-CTX="learning DB hits for [$TERMS] — read these before raw files:
+RAW=$(LEARNING_CALLER=hook LEARNING_DIR="$L" bash "$HOME/.claude/skills/learning/bin/learn.sh" find --brief $TERMS 2>/dev/null)
+# lines this agent already got this session (seen-file rows "line <sid> <agent><TAB><line>") are not sent again
+LK="line ${SID:-nosid} ${AGID:-main}"
+OLD=$(awk -F'\t' -v k="$LK" '$1 == k { sub(/^[^\t]*\t/, ""); print }' "$SEEN" 2>/dev/null)
+HEAD="learning hits [$TERMS] (open only if relevant):"
+# ENVIRON, not -v: awk -v would expand backslashes in the lines. Whole lines only, inject <= 900 chars
+HITS=$(printf '%s\n' "$RAW" | OLD="$OLD" awk -v n=${#HEAD} 'BEGIN { k = split(ENVIRON["OLD"], o, "\n"); for (i = 1; i <= k; i++) s[o[i]] = 1 }
+  $0 != "" && !s[$0]++ { n += length($0) + 1; if (n > 900) exit; print }')
+CTX="$HEAD
 $HITS"
 # metrics: every lookup attempt, hit or miss — hit rate = usability signal
 NH=$(printf '%s' "$HITS" | grep -c .)
 [ -n "$HITS" ] && NB=${#CTX} || NB=0
-{ printf '%s\t%s\n' "$KEY" "$NB" >> "$SEEN"; } 2>/dev/null
-lm pre-search "{\"hits\":$NH,\"bytes\":$NB}"
+{ printf '%s\t%s\n' "$KEY" "$NB" >> "$SEEN"; [ -z "$HITS" ] || printf '%s\n' "$HITS" | awk -v k="$LK" '{ print k "\t" $0 }' >> "$SEEN"; } 2>/dev/null
+# every hit already sent = a repeat, not a miss
+if [ -z "$HITS" ] && [ -n "$RAW" ]; then lm pre-search "{\"hits\":0,\"bytes\":0,\"dup\":true,\"saved\":${#RAW}}"; else lm pre-search "{\"hits\":$NH,\"bytes\":$NB}"; fi
 [ -n "$HITS" ] || exit 0
 jq -n --arg ctx "$CTX" '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$ctx}}'

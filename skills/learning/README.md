@@ -21,7 +21,7 @@ Search and rebuild are plain grep and Python. No LLM runs inside the tool.
 
 ```mermaid
 flowchart TD
-  A[Session starts] --> B[session-start hook: print index head + last session block]
+  A[Session starts] --> B[session-start hook: print search rule, module ids, last session header + next line]
   B --> C[Agent wants to search the code]
   C --> D[pre-search hook: look up the same words in .learning first]
   D --> E[Hits added to the agent's context. Search still runs]
@@ -57,8 +57,8 @@ Linked git worktrees never get their own `.learning/`. The tool and every hook f
 
 | Hook | Event | What it does | Blocks? |
 |---|---|---|---|
-| `learning-session-start.sh` | `SessionStart` | If `.learning/INDEX.md` exists: prints the search rules, lines 5 to 45 of `INDEX.md` (the top of the table) and the newest `SESSIONS.md` block (8 lines) into the agent's context. No database but a project file (`package.json`, `pyproject.toml`, `go.mod`, ...): prints one line that suggests `/learning onboard`. | no |
-| `learning-pre-search.sh` | `PreToolUse`, matcher `Grep\|Glob\|Bash` | Takes the search words from a `Grep`/`Glob` pattern, or from a Bash `grep`, `rg`, `ag`, `ack` or `git grep` that starts a pipeline. Runs `learn.sh find` on them and adds up to 18 hit lines to the agent's context. Same words for the same agent in the same session are not injected twice. Searches inside `.learning` and `... \| grep x` filters are skipped. A Bash call that runs `learn.sh find` itself is only logged. | no |
+| `learning-session-start.sh` | `SessionStart` | If `.learning/INDEX.md` exists: prints the search rule, the ids of the `concept` and `guide` rows of `INDEX.md` (`+N more` for the rest), the newest `SESSIONS.md` header and its `next:` line into the agent's context, under 2 KB (Claude Code shows the agent only the first 2 KB of hook output). No database but a project file (`package.json`, `pyproject.toml`, `go.mod`, ...): prints one line that suggests `/learning onboard`. | no |
+| `learning-pre-search.sh` | `PreToolUse`, matcher `Grep\|Glob\|Bash` | Takes the search words from a `Grep`/`Glob` pattern, or from a Bash `grep`, `rg`, `ag`, `ack` or `git grep` that starts a pipeline. Runs `learn.sh find --brief` on them and adds at most 3 INDEX rows and 3 DOC lines, 900 characters in all, to the agent's context. Same words, or a line already sent, for the same agent in the same session are not injected twice. Searches inside `.learning` and `... \| grep x` filters are skipped. A Bash call that runs `learn.sh find` itself is only logged. | no |
 | `learning-post-edit.sh` | `PostToolUse`, matcher `Edit\|Write\|MultiEdit` | When the edited file is a `.md` under `.learning/`, runs `learn.sh build` to rebuild `INDEX.md` and the graphs. | no |
 | `learning-stop.sh` | `Stop` | Reads the session transcript and counts real file writes by the agent since the last save (a write to `SESSIONS.md` or a `learn.sh build` counts as the save). If there are unsaved writes, it blocks the stop and tells the agent the exact `/learning save` steps. At most 2 blocks per session, then it stays quiet. | yes, max 2 times |
 | `learning-git-post-checkout.sh` | git `post-checkout` (installed into `<repo>/.git/hooks/post-checkout`) | In a new linked worktree: copies `.claude/settings.local.json` and every `CLAUDE.local.md` (max 3 folders deep) from the main checkout, only when the worktree has none. Without this the hooks would not fire in the worktree. It never copies the database. | no |
@@ -78,7 +78,7 @@ Each hook appends one JSON line per event to `~/.claude/learning-metrics.jsonl`.
   - `/usr/bin/lockf` serialises `build` and `migrate` (one writer per database). Without it, builds run unlocked.
   - `stats` uses BSD `date -v`, and falls back to GNU `date -d`.
   - `doctor` warns about another user's `/Users/<name>/` path in `.claude/settings*.json`. That check only knows the macOS home layout.
-- Optional: the `graphify` Python package. With it, `build` writes a richer `graphify-out/graph.json` plus `graph.html`, and `find` adds `NODE` and `EDGE` lines. Without it, `build` still writes a plain graph file and `find` skips those lines. `learn.sh` looks for a `python3` that can `import graphify` (on `PATH`, in `~/.pyenv/versions/*`, `/opt/homebrew/bin`, `/usr/local/bin`) and caches the path in `bin/.python` (gitignored). Inline Python runs with `-I` (isolated mode), so graphify must sit in that interpreter's main `site-packages`: a `pip install --user` copy or a `PYTHONPATH` entry is not seen.
+- Optional: the `graphify` Python package. With it, `build` writes a richer `graphify-out/graph.json` plus `graph.html`, and `find` adds `NODE` lines. Without it, `build` still writes a plain graph file and `find` skips them. `learn.sh` looks for a `python3` that can `import graphify` (on `PATH`, in `~/.pyenv/versions/*`, `/opt/homebrew/bin`, `/usr/local/bin`) and caches the path in `bin/.python` (gitignored). Inline Python runs with `-I` (isolated mode), so graphify must sit in that interpreter's main `site-packages`: a `pip install --user` copy or a `PYTHONPATH` entry is not seen.
 - Optional: the `caveman` style (notes are written in a terse "caveman ultra" style) and an explore-type subagent for onboarding (`caveman:cavecrew-investigator`, `Explore` or `oh-my-claudecode:explore`). Any read-only subagent works.
 
 ## Install
@@ -164,7 +164,7 @@ In Claude Code:
 The helper CLI behind it (run from inside the project):
 
 ```sh
-bash ~/.claude/skills/learning/bin/learn.sh find billing refund     # <= 18 lines: INDEX, DOC, DEC, SES, NODE, EDGE
+bash ~/.claude/skills/learning/bin/learn.sh find billing refund     # <= 16 lines: INDEX, DOC, DEC, SES, NODE
 bash ~/.claude/skills/learning/bin/learn.sh build                   # rebuild INDEX.md + graphs, print problems
 bash ~/.claude/skills/learning/bin/learn.sh migrate                 # build + fill missing frontmatter
 bash ~/.claude/skills/learning/bin/learn.sh vault export --out ~/vaults/myapp
