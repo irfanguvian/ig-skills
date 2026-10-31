@@ -86,9 +86,10 @@ flowchart TD
 - Report `templates.md` §Red. Fix only setup (imports, fixtures, config). Never touch expected values or assertions.
 
 ## Phase 6 — Lock
-1. From repo root: `bash ~/.claude/hooks/test-lock.sh lock --check "<eslint on new test files> && <typecheck>"`. Hashes test files, snapshot baselines and `.learning/specs/**` into `.claude/test-lock.json` (local only, added to `.git/info/exclude`). Check fails → lock NOT written: fix lint/types, lock again. Project queues heavy commands (e.g. `jobq`)? Use it inside the check: `--check "jobq npx eslint <files> && jobq npx tsc --noEmit -p <tsconfig>"`. Heavy check → run the lock call with the Bash tool's `run_in_background` (tool timeout kills long runs). Never lock without `--check`.
+1. From repo root: `bash ~/.claude/hooks/test-lock.sh lock --check "<eslint on new test files> && <typecheck>" --spec <this ticket's spec file>`. Hashes test files, snapshot baselines and the `--spec` file(s) (repeat `--spec` for more than one) into `.claude/test-lock.json` (local only, added to `.git/info/exclude`). Check fails → lock NOT written: fix lint/types, lock again. Project queues heavy commands (e.g. `jobq`)? Use it inside the check: `--check "jobq npx eslint <files> && jobq npx tsc --noEmit -p <tsconfig>"`. Heavy check → run the lock call with the Bash tool's `run_in_background` (tool timeout kills long runs). Never lock without `--check`. Always pass `--spec`: without it every `.learning/specs` file is locked, so another ticket's spec edit fails your `verify`.
 2. While locked, the PreToolUse hook blocks: Edit/Write on locked files, `test-lock.sh unlock`, any touch of the lock file or script, snapshot updates (`-u`, `--update`, `--update-snapshots`, `--updateSnapshot`).
 3. `lock` refuses when a lock already exists. Only the user runs `unlock`, from their own terminal.
+4. Orchestrator: check that the `locked: N files (specs: ...)` line names this ticket's spec. Wrong or missing spec → the user unlocks, lock again.
 
 ## Phase 7 — Implement
 - Tests stay locked. A test looks wrong → STOP, tell the user which rule, in words ("Rule 3 — fee rounds up"), and why. Never work around it: no sed on tests, no skip, no new looser test, no snapshot update.
@@ -111,7 +112,7 @@ flowchart TD
 2. Add 1-3 rows to `.learning/specs/<module>/<module>-bugs.md` (create from `templates.md` §Bugs). Expected values by hand. `status: DRAFT` per row.
 3. Short /lavish: Verdict line + the bug rows + reproduction test plan only. STOP for approval → rows `status: APPROVED`.
 4. Write a failing reproduction test (`BUG<n>: ...`). Red check: fails for the right reason.
-5. `lock --check "..."` (Phase 6) → fix → Phase 8 steps 1-2 only.
+5. `lock --check "..." --spec .learning/specs/<module>/<module>-bugs.md` (Phase 6) → fix → Phase 8 steps 1-2 only.
 
 ## Hard rules
 - Expected values come from the spec, worked by hand. Never from running or reading code.

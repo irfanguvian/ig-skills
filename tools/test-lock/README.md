@@ -9,7 +9,7 @@ An AI agent that cannot get a test green will often edit the test instead: loose
 Asking it nicely not to do that does not work every time.
 test-lock turns the rule into a check:
 
-- `lock` records a hash of every test file, snapshot baseline and spec file, and keeps a copy (the record) outside the repo.
+- `lock` records a hash of every test file and snapshot baseline, plus the spec files you name with `--spec`, and keeps a copy (the record) outside the repo.
 - The `guard` hook blocks the usual ways an agent changes those files or removes the lock while it exists.
 - `verify` proves nothing changed, so a gate can fail the run if something did. `verify` is the real gate; the guard only makes cheating harder.
 
@@ -19,10 +19,10 @@ Only the user removes the lock, from their own terminal.
 
 ```mermaid
 flowchart TD
-  A[Tests written and reviewed] --> B["test-lock.sh lock --check 'lint and typecheck'"]
+  A[Tests written and reviewed] --> B["test-lock.sh lock --check 'lint and typecheck' --spec 'ticket spec'"]
   B --> C{check passed?}
   C -->|no| D[No lock written. Fix lint or types first]
-  C -->|yes| E[Hash test files and specs into .claude/test-lock.json, copy it to the record]
+  C -->|yes| E[Hash test files and the named specs into .claude/test-lock.json, copy it to the record]
   E --> F[Agent writes code]
   F --> G{Agent tool call}
   G -->|Edit or Write on a test file| H[guard blocks: exit 2]
@@ -38,7 +38,7 @@ What counts as a locked file (any depth, so monorepos work):
 
 - `*.spec.ts`, `*.spec.tsx`, `*.test.ts`, `*.test.tsx`, `*.e2e-spec.ts`
 - anything under an `e2e/` folder, a `*-snapshots/` folder or a `__snapshots__/` folder
-- `*.md` files under `.learning/specs/` in the main checkout (also when you run from a linked git worktree)
+- `*.md` files under `.learning/specs/` in the main checkout (also when you run from a linked git worktree): only the files named with `lock --spec`, or all of them when `lock` gets no `--spec`. All linked worktrees share that folder, so pass `--spec`: then one ticket's spec edit does not fail another ticket's `verify`.
 
 Test files are found with `git ls-files -co --exclude-standard` (tracked and untracked, not ignored).
 The lock file `.claude/test-lock.json` is added to `.git/info/exclude`, so it never gets committed.
@@ -94,29 +94,33 @@ In a repo with no `.claude/test-lock.json` the guard only blocks calls that touc
 Run these from anywhere inside the repo. The script finds the repo root itself.
 
 ```sh
-bash ~/.claude/hooks/test-lock.sh lock --check "npx eslint src/a.test.ts && npx tsc --noEmit"
-bash ~/.claude/hooks/test-lock.sh lock      # works, but prints a notice: lint/typecheck not verified
-bash ~/.claude/hooks/test-lock.sh verify    # "ok: N locked files unchanged", or one line per change
+bash ~/.claude/hooks/test-lock.sh lock --check "npx eslint src/a.test.ts && npx tsc --noEmit" --spec .learning/specs/billing/billing-fees.md
+bash ~/.claude/hooks/test-lock.sh lock      # works, but prints notices: lint/typecheck not verified, ALL specs locked
+bash ~/.claude/hooks/test-lock.sh verify    # "ok: N locked files unchanged (specs: ...)", or one line per change
 bash ~/.claude/hooks/test-lock.sh unlock    # the user only, in their own terminal
 ```
 
 - `lock --check "<cmd>"` runs `<cmd>` with `bash -c` from the repo root first. If it fails, no lock is written and the last 20 lines of its output are shown.
+- `lock --spec <file>` locks only that spec file; repeat it for more files. The path can be absolute, relative to where you are, or `.learning/specs/...` of the main checkout. It must be an existing `.md` file inside `.learning/specs/` (no symlink, no `../` way out, no backslash or newline in the path), else no lock is written. If a named spec cannot be hashed (for example it cannot be read), no lock is written either. The lock keeps the list in `"specs"`. Without `--spec`, `"specs"` is `"all"` and a notice is printed.
+- `lock` prints the spec scope: `locked: N files (specs: .learning/specs/a/a.md) -> <lock file>`, or `(specs: all)`. `verify` prints the same scope in its `ok:` line. Check that it names the ticket's spec.
 - `lock` refuses when a lock or a record for this repo already exists: `The user must unlock first.` So deleting the lock and locking again does not work.
 - `lock` refuses when there is nothing to lock (no test, snapshot or spec file).
 - `verify` fails (exit 1) when:
   - the lock has no record (record deleted, or lock made by an older test-lock): `no record for this lock … the user must unlock and lock again.`
   - a record exists but the lock file is gone, or differs from the record,
   - the lock is empty, not valid JSON, or has no files,
+  - the lock's `"specs"` is not `"all"` or a list of `.learning/specs/*.md` paths. A lock with no `"specs"` (made by an older test-lock) checks all specs, as before.
+  - a spec in the `"specs"` list has no hash in `"files"`.
   - any locked file is `changed: <path>`, `added: <path>` or `removed: <path>` (one line each).
 - `unlock` deletes the lock and its record.
 - `guard` is the hook mode. It reads the hook JSON on stdin.
 
 What the guard blocks while a lock exists in the repo (found from the working folder or a `cd <dir>` in the command):
 
-- `Edit`, `Write` and `MultiEdit` on a locked file, on the lock file itself, or on `test-lock.sh`.
+- `Edit`, `Write` and `MultiEdit` on a locked file, on the lock file itself, or on `test-lock.sh`. A `.learning/specs/*.md` file counts as locked only when the lock has no `--spec` list or the list names it. A `../` path whose folder does not exist counts as locked (a symlinked file always does). Only these three tools are scoped by `--spec`.
 - A Bash command that names `test-lock` followed by `.`, `*`, `?` or `[` (so `test-lock.sh`, `test-lock.json`, `test-lock.*`), except `test-lock.sh verify` and `test-lock.sh lock`. So the agent cannot run `unlock`.
 - A Bash command that mentions `.claude` and has a write verb (`rm`, `mv`, `cp`, `ln`, `unlink`, `truncate`, `dd`, `install`, `touch`, `chmod`, `shred`, `rsync`, `patch`, `sed -i`, `perl -i`, `find -delete`, `git clean|checkout|restore|stash|reset|mv|rm`), or that redirects (`>`, `>>`) or `tee`s into a path with `.claude` in it.
-- A Bash command that writes a locked file: a write verb plus a locked file name anywhere in the text, or a `>`, `>>` or `tee` target that is one. "Locked file name" means a locked-file pattern (`.spec.ts`, `.test.ts`, `e2e/`, `snapshots/`, `.learning/specs`) or the base name of any file in the lock. If the lock cannot be read at this step, the call is blocked.
+- A Bash command that writes a locked file: a write verb plus a locked file name anywhere in the text, or a `>`, `>>` or `tee` target that is one. "Locked file name" means a locked-file pattern (`.spec.ts`, `.test.ts`, `e2e/`, `snapshots/`, `.learning/specs`) or the base name of any file in the lock. A Bash write that names `.learning/specs` is always blocked, with or without `--spec`: text matching cannot tell which spec a glob, a variable or a folder command hits. Use `Edit` or `Write` for another ticket's spec. If the lock cannot be read at this step, the call is blocked.
 - Snapshot updates: `--update-snapshots`, `--updateSnapshot`, and `-u` / `--update` on a jest, vitest, playwright or `npm|pnpm|yarn|bun test` command.
 
 What the guard blocks in every repo, lock or not:
@@ -140,7 +144,7 @@ The test lives in the test-engineer-irfan skill folder. It builds a throwaway gi
 ```sh
 TL=~/code/ig-skills/tools/test-lock/test-lock.sh \
   PATH=/bin:/usr/bin:/opt/homebrew/bin bash ~/code/ig-skills/skills/test-engineer-irfan/tests/test-lock-check.sh
-# PASS: 16 cases (a, b, b2, c, d, e, f, g, h, i, j, k, l, l2, m, n)
+# PASS: 25 cases (a, b, b2, c, d, e, f, g, h, i, j, k, l, l2, m, n, o, p, q, r, s, s2, t, u, v)
 ```
 
 Without `TL` it tests `~/.claude/hooks/test-lock.sh`. The `PATH` above makes it run under macOS `/bin/bash` 3.2.
@@ -149,6 +153,7 @@ It also sets `XDG_STATE_HOME` inside the temp folder, so it never touches the re
 - `lock --check`: passing check, failing check, empty check, no check, and a lock that appears while the check runs.
 - `verify`: normal lock ok, a lock without a record fails, empty, corrupt and zero-file locks fail, delete then edit then lock again is caught, a hand-made lock that differs from the record is caught.
 - `unlock` removes the lock and the record.
+- `lock --spec`: only the named spec is locked (three path forms, one entry), the scope in the `locked:` and `ok:` lines, refused paths (missing, not `.md`, outside `.learning/specs`, `../` way out, backslash in the name), an unreadable spec stops the lock, no `--spec` locks all specs, an older lock with no `"specs"` checks all specs, a corrupt `"specs"` or a listed spec with no hash fails `verify`. The guard lets `Edit` change other specs but blocks the locked one (also through `../` or a symlinked folder), and blocks every Bash write that names `.learning/specs` (also by glob). A linked worktree locks a spec in the main checkout, and another spec's edit there does not fail its `verify`.
 - `guard`: glob and folder deletes of the lock, writes onto locked files (`sed -i`, `>`, `cp`, `rm` with a glob, a base name from another folder), the record folder, a `HOME=` override, jq missing (Bash on the lock, Edit on a test file). Plus normal test commands with `> file` or `| tee file` stay allowed.
 
 ## Limits and known gaps
