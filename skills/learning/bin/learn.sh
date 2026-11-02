@@ -62,16 +62,8 @@ WANT = [("SessionStart", None, "learning-session-start.sh", None),
         ("Stop", None, "learning-stop.sh", 10)]
 def has(ev, script): return any(script in json.dumps(e) for e in hooks.get(ev, []))
 if action == "install":
-    for ev, matcher, script, to in WANT:
-        if has(ev, script): continue
-        h = {"type": "command", "command": f"bash {hdir}/{script}"}
-        if to: h["timeout"] = to
-        e = {"hooks": [h]}
-        if matcher: e["matcher"] = matcher
-        hooks.setdefault(ev, []).append(e)
-    f.parent.mkdir(exist_ok=True)
-    f.write_text(json.dumps(s, indent=2) + "\n")
-    print(f"hooks installed -> {f} (local, not committed). restart session to activate.")
+    # lean flow 2026-11-01: the 4 Claude hooks are off; install puts in only the git worktree seed (above)
+    print(f"learning hooks are off (lean flow 2026-11-01): nothing added to {f}")
 elif action == "uninstall":
     for ev in list(hooks):
         hooks[ev] = [e for e in hooks[ev] if "learning-" not in json.dumps(e)]
@@ -125,12 +117,10 @@ def registered():
     h = s.get("hooks", {})
     return h, [sc for sc in SCRIPTS if sc not in json.dumps(h.get(EVENTS[sc], []))]
 hooks, missing = registered()
-if missing:
-    if FIX and run_learn("hooks", "install") == 0 and not registered()[1]:
-        hooks = registered()[0]; did("registered %d hook(s) in %s" % (len(missing), f))
-    elif FIX: problem("hooks install failed for: %s" % ", ".join(missing), "run learn.sh hooks install from the repo root")
-    else: problem("hooks not registered: %s" % ", ".join(missing), "/learning fix")
-else: ok("4 hooks registered in %s" % f)
+left = [sc for sc in SCRIPTS if sc not in missing]  # lean flow 2026-11-01: hooks are off, a leftover one is a problem
+if left: problem("learning hooks still registered in %s: %s" % (f, ", ".join(left)),
+                 "learn.sh hooks uninstall, then learn.sh hooks install (puts the git seed back)")
+else: ok("learning hooks off (lean flow 2026-11-01)")
 
 # 3b. git post-checkout seed (only in a git repo): worktrees must inherit the local config and write to the main .learning/
 gd = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True).stdout.strip()

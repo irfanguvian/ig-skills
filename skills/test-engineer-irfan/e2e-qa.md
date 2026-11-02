@@ -169,4 +169,4 @@ Hard rules:
 
 ## Delegation
 
-Big suite (>10 cases) → split backend/frontend lanes to parallel subagents (`oh-my-claudecode:executor` or direct). **Max 3 subagents in parallel**; more lanes → run in batches. Each handover repeats: E2E only, evidence mandatory, cases scoped to the change, redact secrets, report format above, approved plan only (no scope creep), env+data rules (mutate data local only, staging read-only). Main thread merges into one report.
+Big suite (>10 cases) → split backend/frontend lanes: browser cases to parallel `lane-qa` subagents, API cases direct in main. **Max 3 subagents in parallel**; more lanes → run in batches. Each handover repeats: E2E only, evidence mandatory, cases scoped to the change, redact secrets, report format above, approved plan only (no scope creep), env+data rules (mutate data local only, staging read-only). Main thread merges into one report.

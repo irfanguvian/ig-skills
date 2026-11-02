@@ -1,6 +1,6 @@
 ---
 name: figma-axi
-description: 'Read Figma designs through the figma-axi CLI - file structure, frames, layout and style trees, design tokens (colours, typography, effects), component lists, rendered images, and comments. Use whenever a task needs design data from Figma: implementing a screen from a mockup, extracting colours or spacing, checking what a frame contains, or pulling a render of a design.'
+description: 'Read Figma designs through the figma-axi CLI - file structure, frames, layout and style trees, design tokens, components, rendered images, comments. Use whenever a task needs design data from Figma (build a screen from a mockup, extract colours or spacing, check a frame, pull a render).'
 ---
 
 # figma-axi

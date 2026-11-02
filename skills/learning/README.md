@@ -79,7 +79,7 @@ Each hook appends one JSON line per event to `~/.claude/learning-metrics.jsonl`.
   - `stats` uses BSD `date -v`, and falls back to GNU `date -d`.
   - `doctor` warns about another user's `/Users/<name>/` path in `.claude/settings*.json`. That check only knows the macOS home layout.
 - Optional: the `graphify` Python package. With it, `build` writes a richer `graphify-out/graph.json` plus `graph.html`, and `find` adds `NODE` lines. Without it, `build` still writes a plain graph file and `find` skips them. `learn.sh` looks for a `python3` that can `import graphify` (on `PATH`, in `~/.pyenv/versions/*`, `/opt/homebrew/bin`, `/usr/local/bin`) and caches the path in `bin/.python` (gitignored). Inline Python runs with `-I` (isolated mode), so graphify must sit in that interpreter's main `site-packages`: a `pip install --user` copy or a `PYTHONPATH` entry is not seen.
-- Optional: the `caveman` style (notes are written in a terse "caveman ultra" style) and an explore-type subagent for onboarding (`caveman:cavecrew-investigator`, `Explore` or `oh-my-claudecode:explore`). Any read-only subagent works.
+- Optional: the `caveman` style (notes are written in a terse "caveman ultra" style) and an explore-type subagent for onboarding (`caveman:cavecrew-investigator` or `Explore`). Any read-only subagent works.
 
 ## Install
 

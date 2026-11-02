@@ -1,6 +1,6 @@
 ---
 name: postgres-irfan-axi
-description: "Bridge to LOCAL postgres through the postgres-irfan-axi CLI - list databases, list/describe tables, run read-only queries, execute DDL/DML, run .sql script files, create databases. Use whenever a task needs local postgres: setting up test tables, altering schema during testing, seeding data, or inspecting any project's local database. Works across all projects - database picked per call with -d flag. Never drops databases; DROP TABLE needs explicit user approval first."
+description: "LOCAL postgres via the postgres-irfan-axi CLI - list databases, describe tables, read-only queries, DDL/DML, .sql scripts, create databases. Use for any local postgres task (test tables, schema changes, seed data, a project db). Never drops databases; DROP TABLE needs user approval first."
 user-invocable: true
 ---
 

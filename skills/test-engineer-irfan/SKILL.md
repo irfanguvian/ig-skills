@@ -1,6 +1,6 @@
 ---
 name: test-engineer-irfan
-description: Spec-first testing for any behaviour change - lazy module context (/learning), short interview, spec in .learning/specs, /lavish review gate, tests generated from the APPROVED spec only, red check, hash-locked tests (PreToolUse hook), implement, verify from command output plus mutation check. Lite path for one-rule bugfixes. Also runs E2E manual QA (curl/newman, real browser) with evidence. Trigger - /test-engineer-irfan, "qa this", "test this doc", "e2e test my changes", "full path".
+description: Spec-first tests for a behaviour change - spec in .learning/specs approved on the plan page, tests from it, red check, hash lock, build, mutation check. Lite path for one-rule bugs. E2E QA with evidence. Trigger /test-engineer-irfan, "qa this", "test this doc", "e2e test my changes", "full path".
 trigger: /test-engineer-irfan
 ---
 
@@ -66,11 +66,11 @@ flowchart TD
 
 3. Example tables: work out every expected value by hand from the rule. Never from running or reading code. Money/rounding → show the arithmetic in `note`.
 4. Add/update the feature line in the module doc `## Specs` (`templates.md` §Index). Only other module-doc change allowed: new learnings. Run `learn.sh build` → zero `problem:` lines.
-5. Load `/lavish` (Skill tool) and follow its CLI guidance. Build the review page per `templates.md` §Lavish: verdict line first · interview Q&A with picked answers · rules and old behaviours to keep, with example tables · layer + one-line why · planned tests (rule, test name, layer, file) · out of scope · open questions and assumptions. Labels in words with a short name ("Rule 1 — fee rounds up"), never bare R1/B1.
-6. **STOP.** Wait for the user. Edits → apply to the spec .md (source of truth). Big edits → re-run /lavish. Explicit approval → set `status: APPROVED`. No test code before that.
+5. Load `/lavish` (Skill tool) and follow its CLI guidance. Build the review sections per `templates.md` §Lavish, on the same page as the plan: verdict line first · interview Q&A with picked answers · rules and old behaviours to keep, with example tables · layer + one-line why · planned tests (rule, test name, layer, file) · out of scope · open questions and assumptions. Labels in words with a short name ("Rule 1 — fee rounds up"), never bare R1/B1.
+6. **STOP.** Wait for the user. Edits → apply to the spec .md (source of truth). Big edits → re-run /lavish. Explicit approval → set `status: APPROVED`. No test code before that. Lean flow: Irfan approving the plan page approves the spec too — no second page.
 
 ## Phase 4 — Tests from spec only
-- Delegate to ONE fresh subagent (`oh-my-claudecode:test-engineer`, handover states objective, hard rules, inputs, definition of done, output format). Inputs: APPROVED spec path, interface/DTO/signature files, test conventions, existing test helpers. Hard rule in handover: never open implementation files of the feature under test. Why: main thread may have seen code. Fresh context stops it leaking into expected values.
+- Main writes the tests from the APPROVED spec (lean flow, Irfan 2026-11-01). Expected values come only from the spec rows, never from reading or running the implementation. On Risky work the fresh `lane-reviewer` checks the tests against the spec.
 - Every test name starts with its rule id: `R3: fee rounds up to whole cent`, `B1: ...`, `BUG2: ...`.
 - Property tests: fast-check. Not in `package.json` → AskUserQuestion before install. No → extra boundary unit cases instead (min, min-1, max, max+1, zero, rounding edge).
 - FE e2e (Next.js): Playwright, `getByTestId` asserts on spec values + `toHaveScreenshot` against baselines. Agent screenshots = optional evidence only.
@@ -110,7 +110,7 @@ flowchart TD
 ## Lite path (one-rule bugfix)
 1. Phase 1 context, same lazy rules. Skip the interview.
 2. Add 1-3 rows to `.learning/specs/<module>/<module>-bugs.md` (create from `templates.md` §Bugs). Expected values by hand. `status: DRAFT` per row.
-3. Short /lavish: Verdict line + the bug rows + reproduction test plan only. STOP for approval → rows `status: APPROVED`.
+3. Short /lavish: Verdict line + the bug rows + reproduction test plan only. STOP for approval → rows `status: APPROVED`. Rows already on an approved plan page count.
 4. Write a failing reproduction test (`BUG<n>: ...`). Red check: fails for the right reason.
 5. `lock --check "..." --spec .learning/specs/<module>/<module>-bugs.md` (Phase 6) → fix → Phase 8 steps 1-2 only.
 

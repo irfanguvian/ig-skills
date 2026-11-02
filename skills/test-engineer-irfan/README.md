@@ -65,7 +65,6 @@ Optional (used when the project has them, or when you say yes to installing):
 - [postgres-irfan-axi](../postgres-irfan-axi/README.md) for integration tests against a real local database.
 - `curl` and `newman` for backend QA.
 - The `chrome-devtools-axi` skill, or the Claude in Chrome tools, for browser QA.
-- The `oh-my-claudecode` plugin, for the `oh-my-claudecode:test-engineer` subagent type. Any fresh subagent works.
 - `python3` with `openpyxl`, only when the QA input is an `.xlsx` file.
 - `jobq` (see `tools/jobq`) when your project queues heavy commands like lint and typecheck.
 

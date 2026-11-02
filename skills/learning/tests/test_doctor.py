@@ -32,10 +32,11 @@ class Doctor(unittest.TestCase):
         return subprocess.run(["bash", str(LEARN), *args], cwd=cwd or self.repo, env=env,
                               capture_output=True, text=True)
 
-    def test_reports_then_repairs_missing_scripts_and_registration(self):
+    def test_reports_then_repairs_missing_scripts_and_never_registers_hooks(self):
+        # Contract changed 2026-11-01 (lean flow): the 4 Claude hooks are off; fix must not register them.
         r = self.run_learn("doctor")
         self.assertIn("learning-stop.sh missing", r.stdout)
-        self.assertIn("hooks not registered", r.stdout)
+        self.assertIn("ok: learning hooks off", r.stdout)
         self.assertEqual(1, r.returncode, "doctor must exit non-zero on problems")
 
         self.run_learn("fix")
@@ -43,8 +44,17 @@ class Doctor(unittest.TestCase):
         self.assertIn("verdict: clean", r.stdout)
         self.assertEqual(0, r.returncode)
         self.assertEqual(4, len(list((self.home / ".claude" / "hooks").glob("learning-*.sh"))))
-        reg = json.loads((self.repo / ".claude" / "settings.local.json").read_text())
-        self.assertEqual({"SessionStart", "PreToolUse", "PostToolUse", "Stop"}, set(reg["hooks"]))
+        reg = self.repo / ".claude" / "settings.local.json"
+        self.assertFalse(reg.exists() and "learning-" in reg.read_text(), "fix must never register learning hooks")
+
+    def test_leftover_learning_hook_is_a_problem(self):
+        (self.repo / ".claude").mkdir()
+        (self.repo / ".claude" / "settings.local.json").write_text(json.dumps(
+            {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "bash h/learning-stop.sh"}]}]}}))
+        r = self.run_learn("doctor")
+        self.assertIn("learning hooks still registered", r.stdout)
+        self.assertIn("learning-stop.sh", r.stdout)
+        self.assertEqual(1, r.returncode)
 
     def test_restores_a_stale_script(self):
         self.run_learn("fix")
@@ -82,6 +92,8 @@ class Doctor(unittest.TestCase):
         git = lambda *a, cwd=None: subprocess.run(["git", *a], cwd=cwd or self.repo, capture_output=True, text=True)
         git("init", "-q"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
         (self.repo / "CLAUDE.local.md").write_text("rules\n")
+        (self.repo / ".claude").mkdir()
+        (self.repo / ".claude" / "settings.local.json").write_text('{"hooks": {}}\n')
         r = self.run_learn("doctor")
         self.assertIn("git post-checkout missing", r.stdout)
         self.run_learn("fix")
@@ -102,6 +114,9 @@ class Doctor(unittest.TestCase):
         git = lambda *a: subprocess.run(["git", *a], cwd=self.repo, capture_output=True, text=True)
         git("init", "-q"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
         (self.repo / "CLAUDE.local.md").write_text("rules v1\n")
+        (self.repo / ".claude").mkdir()
+        (self.repo / ".claude" / "settings.local.json").write_text(json.dumps({"hooks": {"PreToolUse": [
+            {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash vitest-guard.sh"}]}]}}, indent=2) + "\n")
         self.run_learn("fix")
         wt = self.tmp / "wt"
         git("worktree", "add", "--detach", str(wt), "HEAD")
